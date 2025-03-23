@@ -1,16 +1,17 @@
 #include <stdio.h>
 #include <string.h>    //strlen
 #ifdef _WIN32
+    #pragma comment(lib, "Ws2_32.lib")
     #include <winsock2.h>
     #define socklen_t int
     #define sleep(x)    Sleep(x*1000)
 #else
     #include <sys/socket.h>
     #include <arpa/inet.h>
+    #include <unistd.h>
 #endif
 
 #include <signal.h>
-#include <unistd.h>
 
 #include "base.c"
 
@@ -461,12 +462,66 @@ static sl_Error sl_init(sl_Context* webServer, int port, S8 certPath, S8 privKey
         return sl_error_socketCreationFailed;
     }
 
-    i32 enable = 1;
+    char enable = 1;
 
     if (setsockopt(socketDesc, SOL_SOCKET, SO_REUSEADDR, &enable, sizeof(int)) < 0) {
         close(socketDesc);
         return sl_error_socketOptionSetFailed;
     }
+
+    struct timeval timeout;
+    timeout.tv_sec = 5;  // 10 seconds
+    timeout.tv_usec = 0;
+
+    // accept timeout
+    if (setsockopt(socketDesc, SOL_SOCKET, SO_RCVBUF, (const char*)&timeout, sizeof(timeout)) < 0) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+
+    // rec timeout
+    if (setsockopt(socketDesc, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+
+#if 0
+    int flag = 1;
+
+    // Disable Nagle's algorithm (TCP_NODELAY)
+    if (setsockopt(socketDesc, IPPROTO_TCP, TCP_NODELAY, &flag, sizeof(flag))) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+
+    // Allow reuse of addresses (SO_REUSEADDR)
+    if (setsockopt(socketDesc, SOL_SOCKET, SO_REUSEADDR, &flag, sizeof(flag))) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+
+    // Increase the receive buffer size (SO_RCVBUF)
+    int buf_size = 4096;
+    if (setsockopt(socketDesc, SOL_SOCKET, SO_RCVBUF, &buf_size, sizeof(buf_size))) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+
+    // Enable keepalive to ensure long-lived connections are properly monitored (SO_KEEPALIVE)
+    if (setsockopt(socketDesc, SOL_SOCKET, SO_KEEPALIVE, &flag, sizeof(flag))) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+
+    // Set a custom linger option (SO_LINGER)
+    struct linger linger_opt;
+    linger_opt.l_onoff = 1;
+    linger_opt.l_linger = 30;  // Wait up to 30 seconds before closing the socket
+    if (setsockopt(socketDesc, SOL_SOCKET, SO_LINGER, &linger_opt, sizeof(linger_opt))) {
+        close(socketDesc);
+        return sl_error_socketOptionSetFailed;
+    }
+#endif
 
     struct sockaddr_in server, client;
      
@@ -553,8 +608,8 @@ static bx sl_WriteData(sl_ClientConnection* connection, const u8* clientMessage,
 static void sl_CloseClientConnection(sl_ClientConnection* connection) {
     SSL_shutdown(connection->client);
 #if OS_WIN
-    shutdown(clientSock, SD_BOTH);
-    closesocket(clientSock);
+    shutdown(connection->clientSock, SD_BOTH);
+    closesocket(connection->clientSock);
 #else
     shutdown(connection->clientSock, SHUT_RDWR);
     close(connection->clientSock);
@@ -577,8 +632,8 @@ void g_ignoreSigpipe(void) {
 }
 
 int main(int argc , char *argv[]) {
-    S8 certPath = s8("/Users/peterjakobs/pjako/cwebserver/certs/localhost.pem");
-    S8 privKeyPath = s8("/Users/peterjakobs/pjako/cwebserver/certs/localhost-key.pem");
+    S8 certPath = s8(PROJECT_ROOT "/certs/cert.pem");
+    S8 privKeyPath = s8(PROJECT_ROOT "/certs/privatkey.pem");
 
     {
         enum {
@@ -652,6 +707,19 @@ int main(int argc , char *argv[]) {
             u8 clientMessage[0xFFFF];
             const char* clMsg = (const char*) &clientMessage[0];
             i32 size = sl_ReadData(&clientConnection, clientMessage, sizeOf(clientMessage));
+            if (size <= 0) {
+                S8 html403Error = s8(
+                    "HTTP/1.1 403 Forbidden\r\n"
+                    "Content-Type: text/plain\r\n"
+                    "Connection: close\r\n"
+                    "\r\n"
+                    "403 Forbidden: This server only accepts secure connections (HTTPS).\n"
+                );
+                
+                send(clientConnection.clientSock, html403Error.content, html403Error.size, 0);
+                sl_CloseClientConnection(&clientConnection);
+                continue;
+            }
             fwrite(clientMessage, size, 1, stdout);
 
             S8 headerData;

@@ -5,6 +5,8 @@
 
 #ifndef _BASE_H_
 #define _BASE_H_
+#pragma warning(push)
+#pragma warning(disable: 4068)
 
 ///////////////////////////////////////////
 // BASE ///////////////////////////////////
@@ -16,6 +18,13 @@
 #define CPP_ENV 0
 #endif
 
+#if CPP_ENV == 0
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    // C11 or later
+#else
+    #error "This code requires at least C11 to compile."
+#endif
+#endif
 
 #pragma mark - Compiler
 
@@ -2697,5 +2706,5 @@ typedef struct Url {
  * @return parsed url. If mem is NULL this value will need to be free:ed with free().
  */
 API Url url_fromStr(S8 urlStr);
-
+#pragma warning(pop)
 #endif // _BASE_H_
