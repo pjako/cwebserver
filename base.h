@@ -2671,6 +2671,301 @@ API u64 tm_roundToCommonRefreshRate(u64 nanoSeconds);
 #define tm_countToMicroSeconds(COUNT) (f64_cast(COUNT) / 1000.0f)
 #define tm_countToNanoSeconds(COUNT) (f64_cast(COUNT))
 
+///////////////////////////////////////////
+// BASE ATOMOIC ///////////////////////////
+///////////////////////////////////////////
+
+#ifdef _MSC_VER
+// #include <winnt.h>
+#include <windows.h>
+#include <intrin.h>
+//typedef u32 volatile A32;
+//typedef u64 volatile A64;
+#define a8_compareAndSwap(dst, expected, desired)  ((u8)  _InterlockedCompareExchange8((volatile char*)dst, (char)desired, (char)expected))
+#define a16_compareAndSwap(dst, expected, desired) ((u16) _InterlockedCompareExchange16((volatile short*)dst, (short)desired, (short)expected))
+#define a32_compareAndSwap(dst, expected, desired) ((u32) _InterlockedCompareExchange32((volatile long*)dst, (long)desired, (long)expected))
+#define a64_compareAndSwap(dst, expected, desired) ((u64) _InterlockedCompareExchange64((volatile long long*)dst, (long long)desired, (long long)expected))
+#define a32_loadVALPTR) InterlockedOr(VALPTR, 0)
+#define a64_load(VALPTR) InterlockedOr64(VALPTR, 0)
+#define a32_store(dst, val) _InterlockedExchange((volatile long*)dst, (u32)val)
+#define a64_store(dst, val) _InterlockedExchange64((volatile long long*)dst, (u64)val)
+
+#define a32_add(dst, val) _InterlockedExchangeAdd((a32*) dst, (u32) val)
+#define a64_add(dst, val) _InterlockedExchangeAdd64((a64*) dst, (u32) val)
+
+// these intrinsics are x86 only
+#define u32_bitScanNonZero(BITFIELD) u32_cast(_lzcnt_u32(BITFIELD))
+#define u64_bitScanNonZero(BITFIELD) u64_cast(_lzcnt_u64(BITFIELD))
+#define u32_bitScanReverseNonZero(BITFIELD) u32_cast(_tzcnt_u32(BITFIELD))
+#define u64_bitScanReverseNonZero(BITFIELD) u64_cast(_tzcnt_u64(BITFIELD))
+#define u32_popCount(BITFIELD) u32_cast(__popcnt(BITFIELD))
+#define u64_popCount(BITFIELD) u64_cast(_mm_popcnt_u64(BITFIELD))
+
+#else
+#include <stdatomic.h>
+//typedef _Atomic(u32) A32;
+//typedef _Atomic(u64) A64;
+// these are clang/GCC specific
+#define a8_compareAndSwap(dst, expected, desired)       ((u8 ) __sync_val_compare_and_swap(dst, expected, desired))
+#define a16_compareAndSwap(dst, expected, desired)      ((u16) __sync_val_compare_and_swap(dst, expected, desired))
+#define a32_compareAndSwap(dst, expected, desired)      ((u32) __sync_val_compare_and_swap(dst, expected, desired))
+#define a64_compareAndSwap(dst, expected, desired)      ((u64) __sync_val_compare_and_swap(dst, expected, desired))
+#define a32_load(VALPTR)  __atomic_load_n(VALPTR, __ATOMIC_SEQ_CST)
+#define a64_load(VALPTR)  __atomic_load_n(VALPTR, __ATOMIC_SEQ_CST)
+#define a32_store(dst, val) __sync_lock_test_and_set((u32*)dst, (u32)val)
+#define a64_store(dst, val) __sync_lock_test_and_set((u64*)dst, (u64)val)
+#define a32_add(dst, val) __atomic_fetch_add((u32*) dst, (u32) val, __ATOMIC_SEQ_CST)
+#define a64_add(dst, val) __atomic_fetch_add((u64*) dst, (u64) val, __ATOMIC_SEQ_CST)
+
+#define u32_bitScanNonZero(BITFIELD) u32_cast(__builtin_clz(BITFIELD))
+#define u64_bitScanNonZero(BITFIELD) u64_cast(__builtin_clzll(BITFIELD))
+#define u32_bitScanReverseNonZero(BITFIELD) u32_cast(__builtin_ctz(BITFIELD))
+#define u64_bitScanReverseNonZero(BITFIELD) u64_cast(__builtin_ctzll(BITFIELD))
+#define u32_popCount(BITFIELD) u32_cast(__builtin_popcount(BITFIELD))
+#define u64_popCount(BITFIELD) u64_cast(__builtin_popcountll(BITFIELD))
+#endif
+
+static inline bool a32_compareAndSwapFull(a32* dst, a32* expected, a32 desired) {
+    u32 old = a32_compareAndSwap(dst, *expected, desired);
+    if (old != *expected) {
+        *expected = old;
+        return false;
+    }
+    return true;
+}
+static inline bool a64_compareAndSwapFull(a64* dst, a64* expected, a64 desired) {
+    a64 old = a64_compareAndSwap(dst, *expected, desired);
+    if (old != *expected) {
+        *expected = old;
+        return false;
+    }
+    return true;
+}
+
+///////////////////////////////////////////
+// OS /////////////////////////////////////
+///////////////////////////////////////////
+
+/////////////////////////
+// Memory Fuctions
+#if OS_EMSCRIPTEN
+#define OS_VIRTUAL_MEMORY 0
+#else
+#define OS_VIRTUAL_MEMORY 1
+#endif // OS_EMSCRIPTEN
+
+API u32 os_coreCount(void);
+
+API umm os_getProcessMemoryUsed(void);
+API u32 os_memoryPageSize(void);
+
+API void* os_memoryReserve(u64 size);
+API void  os_memoryCommit(void* ptr, u64 size);
+API void  os_memorydecommit(void* ptr, u64 size);
+API void  os_memoryRelease(void* ptr, u64 size);
+
+API BaseMemory os_getBaseMemory(void);
+
+/////////////////////////
+// time related functionality
+
+API DateTime os_timeUniversalNow(void);
+API DateTime os_timeLocalFromUniversal(DateTime* date_time);
+API DateTime os_timeUniversalFromLocal(DateTime* date_time);
+API u64 os_timeMicrosecondsNow(void);
+
+
+/////////////////////////
+// File handling
+
+API S8 os_fileRead(Arena* arena, S8 fileName);
+API bx os_fileWrite(S8 fileName, S8 data);
+API bx os_fileDelete(S8 fileName);
+API bx os_fileExists(S8 fileName);
+typedef enum os_systemPath {
+	os_systemPath_currentDir,
+	os_systemPath_binary,
+	os_systemPath_userData,
+	os_systemPath_tempData,
+} os_systemPath;
+
+API S8 os_filepath(Arena* arena, os_systemPath path);
+API S8 os_workingPath(Arena* arena);
+
+INLINE S8 os_getDirectoryFromFilepath(S8 filepath) {
+    i64 lastSlash = str_lastIndexOfChar(filepath, '/');
+    if (lastSlash == -1) {
+        lastSlash = str_lastIndexOfChar(filepath, '\\');
+    }
+    S8 result = filepath;
+    if (lastSlash != -1) {
+        result.size = lastSlash;
+    }
+    return result;
+}
+API S8* os_pathList(Arena* arena, S8 pathName, u64* pathCount);
+API bx os_pathMakeDirectory(S8 pathName);
+API bx os_pathDirectoryExist(S8 pathName);
+
+/////////////////////////
+// File Helper
+
+INLINE S8 os_fixFilepath(Arena* arena, S8 path) {
+    S8 resultPath = STR_NULL;
+    mem_scoped(scratch, arena) {
+        resultPath = str_alloc(arena, path.size);
+
+        S8 fixedPath = path;
+        fixedPath = str_replaceAll(scratch.arena, fixedPath, s8("\\"), s8("/"));
+        fixedPath = str_replaceAll(scratch.arena, fixedPath, s8("/./"), s8("/"));
+        while (true) {
+            u64 dotdot = str_findFirst(fixedPath, s8(".."), 0);
+            if (dotdot == fixedPath.size) break;
+            
+            u64 lastSlash = str_findLast(fixedPath, s8("/"), dotdot - 1);
+            
+            u64 range = (dotdot + 3) - lastSlash;
+            S8 old = fixedPath;
+            fixedPath = str_alloc(scratch.arena, fixedPath.size - range);
+            memcpy(fixedPath.content, old.content, lastSlash);
+            memcpy(fixedPath.content + lastSlash, old.content + dotdot + 3, old.size - range - lastSlash + 1);
+        }
+        ASSERT(fixedPath.size >= path.size);
+        mem_copy(resultPath.content, fixedPath.content, fixedPath.size);
+        resultPath.size = fixedPath.size;
+        // manipulate scratch to not free our result path and only free the temporary strings
+        scratch.start += resultPath.size;
+    }
+    return resultPath;
+}
+
+/////////////////////////
+// File properties
+
+typedef enum os_DataAccessFlags {
+    os_dataAccessFlag_read    = (1 << 0),
+    os_dataAccessFlag_write   = (1 << 1),
+    os_dataAccessFlag_execute = (1 << 2),
+} os_DataAccessFlags;
+
+typedef enum os_FilePropertyFlags {
+    os_filePropertyFlag_isFolder = (1 << 0),
+} os_FilePropertyFlags;
+
+typedef struct os_FileProperties {
+    os_FilePropertyFlags flags;
+    os_DataAccessFlags access;
+    u64 size;
+    DenseTime creationTime;
+    DenseTime lastChangeTime;
+} os_FileProperties;
+
+API os_FileProperties os_fileProperties(S8 fileName);
+
+
+/////////////////////////
+// Filesystem watching
+
+typedef struct os_fsPathWatchId {
+    u32 id;
+} os_fsPathWatchId;
+
+typedef enum os_fsAction {
+    os_fsAction_create = 1,
+    os_fsAction_delete,
+    os_fsAction_modifiy,
+    os_fsAction_move
+} os_fsAction;
+
+typedef enum os_fsPathWatchFlag {os_fsPathTrackFlag_none = 0x0} os_fsPathWatchFlag;
+typedef flags32 os_fsPathWatchFlags;
+
+typedef void(os_fsPathWatchCallback)(os_fsPathWatchId id, S8 path, os_fsAction fsAction, void* custom);
+
+typedef struct os_fsPathWatchCtx os_fsPathWatchCtx;
+API os_fsPathWatchId os_fsWatchPathStart(os_fsPathWatchCtx* ctx, S8 folder, os_fsPathWatchFlags trackFlags, os_fsPathWatchCallback* callback, void* custom);
+API void os_fsWatchPathStop(os_fsPathWatchCtx* ctx, os_fsPathWatchId handle);
+
+API os_fsPathWatchCtx* os_fsWatchPathCreatCtx(Arena* arena);
+API void os_fsWatchPathDestroyCtx(os_fsPathWatchCtx* ctx);
+API void os_fsWatchPathTick(os_fsPathWatchCtx* ctx);
+
+
+/////////////////////////
+// Execute
+
+API void* os_execute(Arena* tmpArena, S8 execPath, S8* args, u32 argCount);
+
+/////////////////////////
+// Dynamic library
+
+typedef struct os_Dl os_Dl;
+
+API os_Dl* os_dlOpen(S8 filePath);
+API void   os_dlClose(os_Dl* handle);
+API void*  os_dlSym(os_Dl* handle, const char* symbol);
+
+/////////////////////////
+// Threading Related
+
+API void os_sleep(u32 ms);
+API void os_yield(void);
+
+/////////////////////////
+// Logging
+void os_log(S8 msg);
+
+/////////////////////////
+// Mutex
+typedef struct os_Mutex {
+    ALIGN_DECL(16, u8) internal[64];
+} os_Mutex;
+
+API void os_mutexInit(os_Mutex* mutex);
+API void os_mutexDestroy(os_Mutex* mutex);
+API void os_mutexLock(os_Mutex* mutex);
+API bx   os_mutexTryLock(os_Mutex* mutex);
+API void os_mutexUnlock(os_Mutex* mutex);
+
+API u32 os__mutexLockRet(os_Mutex* mutex);
+#define os_mutexScoped(mutex) for (u32 iii = (0, os__mutexLockRet(mutex), 0); iii == 0; (iii++, os_mutexUnlock(mutex)))
+
+/////////////////////////
+// Semaphores
+typedef struct os_Semaphore {
+    ALIGN_DECL(16, uint8_t) internal[128];
+} os_Semaphore;
+
+API void os_semaphoreInit(os_Semaphore* sem);
+API void os_semaphorePost(os_Semaphore* sem, u32 count);
+API bool os_semaphoreWait(os_Semaphore* sem, i32 count);
+API void os_semaphoreDestroy(os_Semaphore* sem);
+
+/////////////////////////
+// Threads
+struct os_Thread;
+typedef i32 (os_threadFunc)(struct os_Thread* thread, void* userData);
+typedef struct os_Thread {
+    ALIGN_DECL(16, u8) internal[64];
+    os_threadFunc*     entryFunc;
+    void*              userData;
+    os_Semaphore       sem;
+    u32                stackSize;
+    i32                exitCode;
+    bool               running;
+} os_Thread;
+
+API bool os_threadCreate(os_Thread* thread, os_threadFunc threadFunc, void* userData, u32 stackSize, S8 name);
+API void os_threadShutdown(os_Thread* thread);
+API bool os_threadIsRunning(os_Thread* thread);
+API i32  os_threadGetExitCode(os_Thread* thread);
+API void os_threadSetName(os_Thread* thread, S8 str);
+
+
+///////////////////////////////////////////
+// URL PARSER /////////////////////////////
+///////////////////////////////////////////
+
 typedef enum url_errorCode {
 	url_errorCode_ok = 0,
 	url_errorCode_scheme,
