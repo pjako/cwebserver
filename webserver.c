@@ -641,8 +641,8 @@ int main(int argc , char *argv[]) {
             optionPrivKey = 'p',
         };
         arg_Opt options[] = {
-            {s8("certificate"), optionCert, arg_optType_string, arg_flag_required | arg_flag_requiredValue, s8("certs/localhost.pem"), s8("Certificate file path."), s8("Path to the certificate file. (absolute path)")},
-            {s8("privateKey"), optionPrivKey, arg_optType_string, arg_flag_required | arg_flag_requiredValue, s8("certs/localhost-key.pem"), s8("Private key file path."), s8("Path to the private key file. (absolute path)")},
+            {s8("certificate"), optionCert, arg_optType_string, arg_flag_required | arg_flag_requiredValue, s8(PROJECT_ROOT "certs/cert.pem"), s8("Certificate file path."), s8("Path to the certificate file. (absolute path)")},
+            {s8("privateKey"), optionPrivKey, arg_optType_string, arg_flag_required | arg_flag_requiredValue, s8(PROJECT_ROOT "certs/privatkey.pem"), s8("Private key file path."), s8("Path to the private key file. (absolute path)")},
         };
 
         arg_Ctx argCtx = arg_makeCtx(&options[0], countOf(options), argv, argc);
